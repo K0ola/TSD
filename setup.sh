@@ -1,23 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "🚀 Configuration Raspberry Pi pour projet (npm only)"
+echo "🚀 Configuration Raspberry Pi pour projet (npm only, Hotspot NetworkManager)"
 
-# === 1) Mise à jour système ===
+# ===== 1) Système =====
 sudo apt update && sudo apt upgrade -y
+sudo apt install -y git curl wget build-essential python3 python3-pip python3-venv network-manager
 
-# === 2) Outils de base ===
-sudo apt install -y git curl wget build-essential python3 python3-pip python3-venv
-
-# === 3) Node.js (LTS 20) ===
+# ===== 2) Node.js (LTS 20) =====
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt install -y nodejs
 echo "➡️  Node: $(node -v) | npm: $(npm -v)"
 
-# === 4) Cloner le projet Git ===
+# ===== 3) Cloner le projet =====
 PROJECT_DIR="$HOME/TSD"
 if [ -d "$PROJECT_DIR/.git" ]; then
-  echo "⚠️  Repo déjà présent → pull"
+  echo "⚠️  Repo déjà présent → pull --rebase"
   git -C "$PROJECT_DIR" pull --rebase
 else
   echo "📥 Clonage du projet…"
@@ -25,17 +23,17 @@ else
 fi
 cd "$PROJECT_DIR"
 
-# === 5) Backend Python (server) ===
+# ===== 4) Backend Python =====
 cd server
 python3 -m venv venv
 source venv/bin/activate
-pip install --upgrade pip
+python -m pip install --upgrade pip
 if [ -f requirements.txt ]; then
-  pip install -r requirements.txt
+  python -m pip install -r requirements.txt
 fi
 deactivate
 
-# === 6) Frontend React (npm) ===
+# ===== 5) Frontend (npm) =====
 cd ../front-end
 if [ -f package-lock.json ]; then
   npm ci
@@ -43,63 +41,52 @@ else
   npm install
 fi
 
-# === 7) Hotspot Wi-Fi (hostapd + dnsmasq) ===
-sudo apt install -y hostapd dnsmasq
+# ===== 6) Hotspot Wi-Fi avec NetworkManager (Bookworm) =====
+echo "📡 Configuration du hotspot via NetworkManager…"
 
-# Stop services while configuring
-sudo systemctl stop hostapd || true
-sudo systemctl stop dnsmasq || true
+SSID="${SSID:-TSD_K0la}"
+WIFI_PSK="${WIFI_PSK:-daylight}"
+CON_NAME="Hotspot-$SSID"
 
-# Sauvegarde ancienne config dnsmasq si elle existe
-if [ -f /etc/dnsmasq.conf ]; then
-  sudo mv /etc/dnsmasq.conf /etc/dnsmasq.conf.orig
+# Évite les conflits si hostapd/dnsmasq avaient été configurés avant
+sudo systemctl stop hostapd dnsmasq 2>/dev/null || true
+sudo systemctl disable hostapd dnsmasq 2>/dev/null || true
+
+# Active le Wi-Fi et détecte l’interface (wlan0 généralement)
+sudo nmcli radio wifi on
+IFACE="$(nmcli -t -f DEVICE,TYPE dev status | awk -F: '$2=="wifi"{print $1; exit}')"
+IFACE="${IFACE:-wlan0}"
+echo "➡️  Interface Wi-Fi détectée : $IFACE"
+
+# Supprime une éventuelle ancienne connexion de même nom
+if nmcli -t -f NAME con show | grep -qx "$CON_NAME"; then
+  sudo nmcli con delete "$CON_NAME"
 fi
 
-# Nouvelle config dnsmasq
-sudo tee /etc/dnsmasq.conf >/dev/null <<'EOF'
-interface=wlan0
-dhcp-range=192.168.4.2,192.168.4.20,255.255.255.0,24h
-EOF
+# Crée la connexion AP
+sudo nmcli con add type wifi ifname "$IFACE" con-name "$CON_NAME" ssid "$SSID"
+sudo nmcli con modify "$CON_NAME" \
+  802-11-wireless.mode ap 802-11-wireless.band bg \
+  wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$WIFI_PSK" \
+  ipv4.method shared
 
-# Config réseau statique
-sudo tee -a /etc/dhcpcd.conf >/dev/null <<'EOF'
+# (Option) Adresse IP voulue (sinon NM mettra 10.42.0.1)
+sudo nmcli con modify "$CON_NAME" ipv4.addresses 192.168.4.1/24 || true
 
-interface wlan0
-    static ip_address=192.168.4.1/24
-    nohook wpa_supplicant
-EOF
+# Monte le hotspot
+sudo nmcli con up "$CON_NAME"
 
-# Config hostapd
-sudo tee /etc/hostapd/hostapd.conf >/dev/null <<'EOF'
-interface=wlan0
-driver=nl80211
-ssid=TSD_K0la
-hw_mode=g
-channel=7
-wmm_enabled=0
-auth_algs=1
-ignore_broadcast_ssid=0
-wpa=2
-wpa_passphrase=daylight
-wpa_key_mgmt=WPA-PSK
-rsn_pairwise=CCMP
-EOF
+# Récupère l'IP réellement assignée
+HOTSPOT_IP="$(ip -4 addr show dev "$IFACE" | awk '/inet /{print $2}' | cut -d/ -f1 | head -n1)"
+echo "📡 Hotspot actif → SSID: $SSID | Mot de passe: $WIFI_PSK | IP du Pi: ${HOTSPOT_IP:-10.42.0.1}"
 
-sudo sed -i 's|^#\?DAEMON_CONF=.*|DAEMON_CONF="/etc/hostapd/hostapd.conf"|' /etc/default/hostapd
-
-# Redémarrage des services
-sudo systemctl unmask hostapd || true
-sudo systemctl enable hostapd dnsmasq
-sudo systemctl restart dhcpcd
-sudo systemctl start hostapd
-sudo systemctl start dnsmasq
-
-echo "📡 Hotspot Wi-Fi activé → SSID: TSD_K0la | Mot de passe: daylight | IP du Pi: 192.168.4.1"
-
-# === 8) Rappels de lancement ===
+# ===== 7) Rappels =====
 echo "✅ Installation terminée !"
 echo "➡️  Backend :  cd $PROJECT_DIR/server && source venv/bin/activate && python app.py"
-echo "➡️  Front   :  cd $PROJECT_DIR/front-end && npm start"
+echo "➡️  Front   :  cd $PROJECT_DIR/front-end && HOST=0.0.0.0 PORT=3000 npm start"
+echo "ℹ️  Depuis ton PC (connecté au Wi-Fi $SSID) :"
+echo "    Front  →  http://${HOTSPOT_IP:-10.42.0.1}:3000"
+echo "    API    →  http://${HOTSPOT_IP:-10.42.0.1}:8000 (si backend sur 8000)"
 
 
 # chmod +x setup.sh
