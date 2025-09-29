@@ -1,4 +1,3 @@
-#!/usr/bin/env bash
 set -euo pipefail
 
 echo "🚀 Configuration Raspberry Pi pour projet (npm only, Hotspot NetworkManager)"
