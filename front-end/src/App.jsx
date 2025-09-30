@@ -8,21 +8,20 @@ import "./App.css";
  * - En dev (npm start) => définir REACT_APP_API_BASE, ex: http://192.168.4.1:8000
  */
 const DEFAULT_BASE =
-  process.env.REACT_APP_API_BASE || `${window.location.origin}`;
+  process.env.REACT_APP_API_BASE ||
+  `${window.location.protocol}//${window.location.hostname}:8000`;
 
 export default function App() {
   const [apiBase, setApiBase] = useState(DEFAULT_BASE);
+
   const feedUrl = useMemo(
-    () => `${apiBase.replace(/\/$/, "")}/camera/video_feed`,
+    () => `${apiBase.replace(/\/$/, "")}/api/camera/video_feed`,
     [apiBase]
   );
   const healthUrl = useMemo(
-    () => `${apiBase.replace(/\/$/, "")}/health`,
+    () => `${apiBase.replace(/\/$/, "")}/api/health`,
     [apiBase]
   );
-
-  const [health, setHealth] = useState({ ok: false, last: null });
-  const [imgError, setImgError] = useState(false);
 
   // Ping /api/health toutes les 5 s
   useEffect(() => {

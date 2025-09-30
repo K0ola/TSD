@@ -4,7 +4,8 @@ import os, logging
 from pathlib import Path
 from datetime import datetime
 from flask import Flask, send_from_directory, jsonify
-from camera_stream import bp_camera   # 👈 import blueprint
+from flask_cors import CORS
+from camera_stream import bp_camera
 
 BASE_DIR = Path(__file__).resolve().parent
 FRONT_BUILD_DIR = (BASE_DIR / ".." / "front-end" / "build").resolve()
@@ -25,6 +26,8 @@ def create_app() -> Flask:
         static_folder=str(FRONT_BUILD_DIR),
         static_url_path="/",
     )
+
+    CORS(app, resources={r"/api/*": {"origins": "*"}})
 
     # -------- API minimal --------
     @app.get("/api/health")
