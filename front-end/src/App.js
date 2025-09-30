@@ -13,11 +13,11 @@ const DEFAULT_BASE =
 export default function App() {
   const [apiBase, setApiBase] = useState(DEFAULT_BASE);
   const feedUrl = useMemo(
-    () => `${apiBase.replace(/\/$/, "")}/api/camera/video_feed`,
+    () => `${apiBase.replace(/\/$/, "")}/camera/video_feed`,
     [apiBase]
   );
   const healthUrl = useMemo(
-    () => `${apiBase.replace(/\/$/, "")}/api/health`,
+    () => `${apiBase.replace(/\/$/, "")}/health`,
     [apiBase]
   );
 
