@@ -30,13 +30,21 @@ if [ ! -d "venv" ]; then python3 -m venv venv; fi
 source venv/bin/activate
 python -m pip install --upgrade pip >/dev/null
 [ -f requirements.txt ] && python -m pip install -r requirements.txt >/dev/null
-deactivate
 
 echo "🐍 Backend : lancement…"
+# On lance Flask en arrière-plan et on stream ses logs en live
 nohup bash -lc "cd '$BACKEND_DIR' && source venv/bin/activate && HOST=0.0.0.0 PORT=$BACKEND_PORT python app.py" \
   >"$LOG_DIR/backend.log" 2>&1 &
 echo $! > "$PID_DIR/backend.pid"
-echo "   → PID backend: $(cat "$PID_DIR/backend.pid") | Log: $LOG_DIR/backend.log"
+echo "   → PID backend: $(cat "$PID_DIR/backend.pid")"
+
+# Stream des logs backend en direct dans ton terminal
+echo
+echo "📜 Logs Backend (en direct) :"
+tail -f "$LOG_DIR/backend.log" &
+TAIL_BACK_PID=$!
+
+deactivate
 
 # ====== FRONTEND (React / npm) ======
 echo "🧩 Frontend : install (si besoin)…"
@@ -56,9 +64,11 @@ echo "   Frontend       : http://$PI_IP:$FRONT_PORT"
 echo "   Backend API    : http://$PI_IP:$BACKEND_PORT"
 echo "   Flux MJPEG     : http://$PI_IP:$BACKEND_PORT/api/camera/video_feed"
 echo
-echo "ℹ️  Dans l’UI React, l’API par défaut sera :  http://$PI_IP:$BACKEND_PORT"
-echo "   (tu peux aussi la saisir à la main dans le champ “API Base URL”)."
+echo "ℹ️  Dans l’UI React, mets l'API Base URL sur :"
+echo "   http://$PI_IP:$BACKEND_PORT"
 echo
-echo "🔎 Logs :"
-echo "   tail -f '$LOG_DIR/backend.log'"
+echo "🔎 Logs frontend :"
 echo "   tail -f '$LOG_DIR/frontend.log'"
+echo
+echo "⏹️  Pour stopper le suivi des logs backend :"
+echo "   kill $TAIL_BACK_PID"
