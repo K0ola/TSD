@@ -1,11 +1,11 @@
-// src/App.js
+// src/App.jsx
 import { useEffect, useMemo, useState } from "react";
 import "./App.css";
 
 /**
  * Base API:
- * - En prod (build servi par Flask) => même origine
- * - En dev (npm start) => définir REACT_APP_API_BASE, ex: http://192.168.4.1:8000
+ * - Prod (build servi par Flask) => même origine
+ * - Dev (npm start) => définir REACT_APP_API_BASE (ex: http://192.168.4.1:8000)
  */
 const DEFAULT_BASE =
   process.env.REACT_APP_API_BASE ||
@@ -13,28 +13,26 @@ const DEFAULT_BASE =
 
 export default function App() {
   const [apiBase, setApiBase] = useState(DEFAULT_BASE);
+  const [health, setHealth] = useState({ ok: false, last: null });
+  const [imgError, setImgError] = useState(false);
 
-  const feedUrl = useMemo(
-    () => `${apiBase.replace(/\/$/, "")}/api/camera/video_feed`,
-    [apiBase]
-  );
-  const healthUrl = useMemo(
-    () => `${apiBase.replace(/\/$/, "")}/api/health`,
-    [apiBase]
-  );
+  const base = useMemo(() => apiBase.replace(/\/$/, ""), [apiBase]);
+  const feedUrl = `${base}/api/camera/video_feed`;
+  const healthUrl = `${base}/api/health`;
 
   // Ping /api/health toutes les 5 s
   useEffect(() => {
     let stop = false;
+
     const tick = async () => {
       try {
         const res = await fetch(healthUrl, { cache: "no-store" });
-        const ok = res.ok;
-        if (!stop) setHealth({ ok, last: new Date().toLocaleTimeString() });
-      } catch (e) {
+        if (!stop) setHealth({ ok: res.ok, last: new Date().toLocaleTimeString() });
+      } catch (_e) {
         if (!stop) setHealth({ ok: false, last: new Date().toLocaleTimeString() });
       }
     };
+
     tick();
     const id = setInterval(tick, 5000);
     return () => {
@@ -62,15 +60,7 @@ export default function App() {
         </small>
       </header>
 
-      <section
-        style={{
-          display: "grid",
-          gap: 12,
-          gridTemplateColumns: "1fr",
-          alignItems: "start",
-          marginBottom: 16,
-        }}
-      >
+      <section style={{ display: "grid", gap: 12, gridTemplateColumns: "1fr", alignItems: "start", marginBottom: 16 }}>
         <label style={{ textAlign: "left" }}>
           <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>API Base URL</div>
           <input
@@ -115,7 +105,7 @@ export default function App() {
             Impossible d’afficher le flux. Vérifie :
             <ul>
               <li>Que le backend Flask tourne</li>
-              <li>Que l’URL est correcte</li>
+              <li>Que l’URL ci-dessus est correcte</li>
               <li>Que la caméra est détectée</li>
             </ul>
           </div>
