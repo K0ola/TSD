@@ -78,11 +78,13 @@ def _select_generator():
 
 @bp_camera.route("/video_feed")
 def video_feed():
-    try:
-        gen = _select_generator()
-    except Exception as e:
-        return Response(f"Camera backend init error: {e}\n", status=500, mimetype="text/plain")
-    return Response(gen(), mimetype="multipart/x-mixed-replace; boundary=frame")
+    gen = mjpeg_generator_picamera2() if PICAMERA2_AVAILABLE else mjpeg_generator_opencv()
+    resp = Response(gen, mimetype="multipart/x-mixed-replace; boundary=frame", direct_passthrough=True)
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
 
 @bp_camera.route("/health")
 def health():

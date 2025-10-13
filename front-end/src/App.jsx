@@ -94,8 +94,10 @@ export default function App() {
       >
         {!imgError ? (
           <img
+            key={feedUrl}                 // force un rechargement si l’URL change
             src={feedUrl}
             alt="Pi Camera"
+            crossOrigin="anonymous"       // évite les blocages cross-origin
             style={{ width: "100%", display: "block" }}
             onError={() => setImgError(true)}
             onLoad={() => setImgError(false)}
