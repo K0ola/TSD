@@ -1,14 +1,17 @@
 # camera_stream.py
 import os
 from io import BytesIO
-from flask import Blueprint, Response
+from flask import Blueprint, Response, abort
 
-# Essayez d'activer Picamera2 si dispo
-try:
-    from picamera2 import Picamera2
-    PICAMERA2_AVAILABLE = True
-except Exception:
-    PICAMERA2_AVAILABLE = False
+# Sélection explicite par env: picamera2 | v4l2 | auto
+CAM_BACKEND = os.getenv("CAM_BACKEND", "auto").lower()
+
+def _have_picamera2():
+    try:
+        from picamera2 import Picamera2  # noqa: F401
+        return True
+    except Exception:
+        return False
 
 WIDTH  = int(os.getenv("WIDTH", "640"))
 HEIGHT = int(os.getenv("HEIGHT", "480"))
@@ -18,32 +21,29 @@ JPEG_QUALITY = int(os.getenv("JPEG_QUALITY", "80"))
 bp_camera = Blueprint("camera", __name__)
 
 def mjpeg_generator_picamera2():
-    """Flux MJPEG via Picamera2, encodage JPEG avec Pillow (pas de cv2)."""
-    from PIL import Image  # import local
-    import numpy as np
+    from picamera2 import Picamera2
+    from PIL import Image
+    import numpy as np  # noqa: F401
 
     picam2 = Picamera2()
-    config = picam2.create_video_configuration(
+    cfg = picam2.create_video_configuration(
         main={"size": (WIDTH, HEIGHT), "format": "RGB888"}
     )
-    picam2.configure(config)
+    picam2.configure(cfg)
     picam2.start()
     try:
         while True:
-            frame = picam2.capture_array()          # numpy RGB888 (H,W,3)
-            # Encodage JPEG
-            im = Image.fromarray(frame, mode="RGB")
+            frame = picam2.capture_array()
             buf = BytesIO()
-            im.save(buf, format="JPEG", quality=JPEG_QUALITY, optimize=True)
-            jpeg_bytes = buf.getvalue()
+            Image.fromarray(frame, "RGB").save(buf, "JPEG", quality=JPEG_QUALITY, optimize=True)
             yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" +
-                   jpeg_bytes + b"\r\n")
+                   buf.getvalue() + b"\r\n")
     finally:
         picam2.stop()
 
-def mjpeg_generator_opencv():
-    """Flux MJPEG via V4L2 + OpenCV (uniquement si nécessaire)."""
-    import cv2  # import local, évite l’erreur si non installé
+def mjpeg_generator_v4l2():
+    # Utilisé seulement si tu veux une webcam USB et que opencv est installé via apt
+    import cv2
     cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH,  WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, HEIGHT)
@@ -55,15 +55,36 @@ def mjpeg_generator_opencv():
             ok, frame = cap.read()
             if not ok:
                 continue
-            ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
+            ok, enc = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
             if not ok:
                 continue
-            yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" +
-                   buf.tobytes() + b"\r\n")
+            yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + enc.tobytes() + b"\r\n")
     finally:
         cap.release()
 
+def _select_generator():
+    # priorité à la variable d'env
+    if CAM_BACKEND == "picamera2":
+        if not _have_picamera2():
+            raise RuntimeError("CAM_BACKEND=picamera2 mais picamera2 n'est pas importable (venv sans --system-site-packages ?)")
+        return mjpeg_generator_picamera2
+    if CAM_BACKEND == "v4l2":
+        return mjpeg_generator_v4l2
+
+    # auto
+    if _have_picamera2():
+        return mjpeg_generator_picamera2
+    return mjpeg_generator_v4l2
+
 @bp_camera.route("/video_feed")
 def video_feed():
-    gen = mjpeg_generator_picamera2() if PICAMERA2_AVAILABLE else mjpeg_generator_opencv()
-    return Response(gen, mimetype="multipart/x-mixed-replace; boundary=frame")
+    try:
+        gen = _select_generator()
+    except Exception as e:
+        return Response(f"Camera backend init error: {e}\n", status=500, mimetype="text/plain")
+    return Response(gen(), mimetype="multipart/x-mixed-replace; boundary=frame")
+
+@bp_camera.route("/health")
+def health():
+    return {"ok": True, "backend": CAM_BACKEND or "auto", "have_picamera2": _have_picamera2(),
+            "w": WIDTH, "h": HEIGHT, "fps": FPS}
