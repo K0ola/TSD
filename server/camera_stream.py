@@ -78,8 +78,18 @@ def _select_generator():
 
 @bp_camera.route("/video_feed")
 def video_feed():
-    gen = mjpeg_generator_picamera2() if PICAMERA2_AVAILABLE else mjpeg_generator_opencv()
-    resp = Response(gen, mimetype="multipart/x-mixed-replace; boundary=frame", direct_passthrough=True)
+    # Choisit dynamiquement le backend (picamera2 ou v4l2) selon CAM_BACKEND/auto
+    try:
+        gen_fn = _select_generator()   # ← renvoie mjpeg_generator_picamera2 ou mjpeg_generator_v4l2
+    except RuntimeError as e:
+        return Response(str(e), status=503, mimetype="text/plain")
+
+    resp = Response(
+        gen_fn(),  # ← IMPORTANT: on passe le générateur, pas la fonction
+        mimetype="multipart/x-mixed-replace; boundary=frame",
+        direct_passthrough=True,
+    )
+    # CORS + no-cache pour que l’<img> affiche bien le MJPEG
     resp.headers["Access-Control-Allow-Origin"] = "*"
     resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     resp.headers["Pragma"] = "no-cache"
