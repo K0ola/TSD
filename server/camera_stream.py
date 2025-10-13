@@ -1,7 +1,10 @@
 # camera_stream.py
 import os
 from io import BytesIO
-from flask import cross_origin, Blueprint, Response, abort
+from flask import Blueprint, Response, abort
+
+from flask_cors import cross_origin
+
 
 
 
