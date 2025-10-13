@@ -1,7 +1,9 @@
 # camera_stream.py
 import os
 from io import BytesIO
-from flask import Blueprint, Response, abort
+from flask import cross_origin, Blueprint, Response, abort
+
+
 
 # Sélection explicite par env: picamera2 | v4l2 | auto
 CAM_BACKEND = os.getenv("CAM_BACKEND", "auto").lower()
@@ -76,21 +78,23 @@ def _select_generator():
         return mjpeg_generator_picamera2
     return mjpeg_generator_v4l2
 
-@bp_camera.route("/video_feed")
+@bp_camera.route("/video_feed", methods=["GET", "OPTIONS"])
+@cross_origin(origins="*")  # ➋ pour être sûr même avec un stream
 def video_feed():
-    # Choisit dynamiquement le backend (picamera2 ou v4l2) selon CAM_BACKEND/auto
     try:
-        gen_fn = _select_generator()   # ← renvoie mjpeg_generator_picamera2 ou mjpeg_generator_v4l2
-    except RuntimeError as e:
-        return Response(str(e), status=503, mimetype="text/plain")
+        gen_fn = _select_generator()
+    except Exception as e:
+        return Response(f"Camera backend init error: {e}\n", status=500, mimetype="text/plain")
 
     resp = Response(
-        gen_fn(),  # ← IMPORTANT: on passe le générateur, pas la fonction
+        gen_fn(),
         mimetype="multipart/x-mixed-replace; boundary=frame",
         direct_passthrough=True,
     )
-    # CORS + no-cache pour que l’<img> affiche bien le MJPEG
+    # ➌ En-têtes CORS + no-cache pour les <img> cross-origin
     resp.headers["Access-Control-Allow-Origin"] = "*"
+    resp.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
     resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     resp.headers["Pragma"] = "no-cache"
     resp.headers["Expires"] = "0"
