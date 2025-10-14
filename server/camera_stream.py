@@ -28,23 +28,34 @@ bp_camera = Blueprint("camera", __name__)
 def mjpeg_generator_picamera2():
     from picamera2 import Picamera2
     from PIL import Image
-    import numpy as np  # noqa: F401
 
     picam2 = Picamera2()
-    cfg = picam2.create_video_configuration(
-        main={"size": (WIDTH, HEIGHT), "format": "RGB888"}
-    )
+    cfg = picam2.create_video_configuration(main={"size": (WIDTH, HEIGHT), "format": "RGB888"})
     picam2.configure(cfg)
     picam2.start()
     try:
+        period = 1.0 / max(FPS, 1)
         while True:
-            frame = picam2.capture_array()
+            t0 = time.time()
+            frame = picam2.capture_array()  # numpy RGB888
             buf = BytesIO()
             Image.fromarray(frame, "RGB").save(buf, "JPEG", quality=JPEG_QUALITY, optimize=True)
-            yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" +
-                   buf.getvalue() + b"\r\n")
+            jpg = buf.getvalue()
+            yield (b"--frame\r\n"
+                   b"Content-Type: image/jpeg\r\n"
+                   b"Content-Length: " + str(len(jpg)).encode() + b"\r\n\r\n" +
+                   jpg + b"\r\n")
+            # cadence régulière
+            dt = time.time() - t0
+            if dt < period:
+                time.sleep(period - dt)
+    except (BrokenPipeError, GeneratorExit):
+        # le client a fermé : on sort sans 500
+        pass
     finally:
         picam2.stop()
+
+
 
 def mjpeg_generator_v4l2():
     # Utilisé seulement si tu veux une webcam USB et que opencv est installé via apt
@@ -81,26 +92,16 @@ def _select_generator():
         return mjpeg_generator_picamera2
     return mjpeg_generator_v4l2
 
-@bp_camera.route("/video_feed", methods=["GET", "OPTIONS"])
-@cross_origin(origins="*")  # ➋ pour être sûr même avec un stream
+@bp_camera.route("/video_feed")
 def video_feed():
-    try:
-        gen_fn = _select_generator()
-    except Exception as e:
-        return Response(f"Camera backend init error: {e}\n", status=500, mimetype="text/plain")
-
-    resp = Response(
-        gen_fn(),
-        mimetype="multipart/x-mixed-replace; boundary=frame",
-        direct_passthrough=True,
-    )
-    # ➌ En-têtes CORS + no-cache pour les <img> cross-origin
-    resp.headers["Access-Control-Allow-Origin"] = "*"
-    resp.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
-    resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
-    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp = Response(mjpeg_generator_picamera2(),
+                    mimetype="multipart/x-mixed-replace; boundary=frame",
+                    direct_passthrough=True)
+    # anti-buffering & anti-cache
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
     resp.headers["Pragma"] = "no-cache"
     resp.headers["Expires"] = "0"
+    resp.headers["Connection"] = "keep-alive"
     return resp
 
 @bp_camera.route("/health")
