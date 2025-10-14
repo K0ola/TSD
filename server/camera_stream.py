@@ -1,17 +1,12 @@
-# camera_stream.py
+# server/camera_stream.py
 import os
 from io import BytesIO
-from flask import Blueprint, Response, abort
+from flask import Blueprint, Response, request, make_response
 
-from flask_cors import cross_origin
-
-
-
-
-# Sélection explicite par env: picamera2 | v4l2 | auto
+# Which backend to use: "picamera2" | "v4l2" | "auto"
 CAM_BACKEND = os.getenv("CAM_BACKEND", "auto").lower()
 
-def _have_picamera2():
+def _have_picamera2() -> bool:
     try:
         from picamera2 import Picamera2  # noqa: F401
         return True
@@ -26,39 +21,28 @@ JPEG_QUALITY = int(os.getenv("JPEG_QUALITY", "80"))
 bp_camera = Blueprint("camera", __name__)
 
 def mjpeg_generator_picamera2():
+    """MJPEG from Pi camera using Picamera2 + Pillow (no OpenCV)."""
     from picamera2 import Picamera2
     from PIL import Image
 
-    picam2 = Picamera2()
-    cfg = picam2.create_video_configuration(main={"size": (WIDTH, HEIGHT), "format": "RGB888"})
-    picam2.configure(cfg)
-    picam2.start()
+    cam = Picamera2()
+    cfg = cam.create_video_configuration(main={"size": (WIDTH, HEIGHT), "format": "RGB888"})
+    cam.configure(cfg)
+    cam.start()
+
     try:
-        period = 1.0 / max(FPS, 1)
         while True:
-            t0 = time.time()
-            frame = picam2.capture_array()  # numpy RGB888
+            frame = cam.capture_array()  # numpy RGB888 (H,W,3)
             buf = BytesIO()
             Image.fromarray(frame, "RGB").save(buf, "JPEG", quality=JPEG_QUALITY, optimize=True)
-            jpg = buf.getvalue()
             yield (b"--frame\r\n"
-                   b"Content-Type: image/jpeg\r\n"
-                   b"Content-Length: " + str(len(jpg)).encode() + b"\r\n\r\n" +
-                   jpg + b"\r\n")
-            # cadence régulière
-            dt = time.time() - t0
-            if dt < period:
-                time.sleep(period - dt)
-    except (BrokenPipeError, GeneratorExit):
-        # le client a fermé : on sort sans 500
-        pass
+                   b"Content-Type: image/jpeg\r\n\r\n" +
+                   buf.getvalue() + b"\r\n")
     finally:
-        picam2.stop()
-
-
+        cam.stop()
 
 def mjpeg_generator_v4l2():
-    # Utilisé seulement si tu veux une webcam USB et que opencv est installé via apt
+    """MJPEG from a USB webcam via OpenCV (requires python3-opencv)."""
     import cv2
     cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH,  WIDTH)
@@ -66,6 +50,7 @@ def mjpeg_generator_v4l2():
     cap.set(cv2.CAP_PROP_FPS, FPS)
     if not cap.isOpened():
         raise RuntimeError("Impossible d'ouvrir /dev/video0")
+
     try:
         while True:
             ok, frame = cap.read()
@@ -74,37 +59,55 @@ def mjpeg_generator_v4l2():
             ok, enc = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
             if not ok:
                 continue
-            yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + enc.tobytes() + b"\r\n")
+            yield (b"--frame\r\n"
+                   b"Content-Type: image/jpeg\r\n\r\n" +
+                   enc.tobytes() + b"\r\n")
     finally:
         cap.release()
 
 def _select_generator():
-    # priorité à la variable d'env
+    # explicit choice first
     if CAM_BACKEND == "picamera2":
         if not _have_picamera2():
-            raise RuntimeError("CAM_BACKEND=picamera2 mais picamera2 n'est pas importable (venv sans --system-site-packages ?)")
+            raise RuntimeError("CAM_BACKEND=picamera2, mais picamera2 n'est pas importable")
         return mjpeg_generator_picamera2
     if CAM_BACKEND == "v4l2":
         return mjpeg_generator_v4l2
-
     # auto
-    if _have_picamera2():
-        return mjpeg_generator_picamera2
-    return mjpeg_generator_v4l2
+    return mjpeg_generator_picamera2 if _have_picamera2() else mjpeg_generator_v4l2
 
-@bp_camera.route("/video_feed")
+@bp_camera.route("/video_feed", methods=["GET", "OPTIONS"])
 def video_feed():
-    resp = Response(mjpeg_generator_picamera2(),
+    # CORS preflight (dev/front séparé)
+    if request.method == "OPTIONS":
+        r = make_response("", 204)
+        r.headers["Access-Control-Allow-Origin"] = "*"
+        r.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+        r.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        return r
+
+    try:
+        gen = _select_generator()()  # <- generator *instance*
+    except Exception as e:
+        # Make the error visible in browser & front console
+        return Response(f"Camera backend init error: {e}\n",
+                        status=500, mimetype="text/plain")
+
+    resp = Response(gen,
                     mimetype="multipart/x-mixed-replace; boundary=frame",
                     direct_passthrough=True)
-    # anti-buffering & anti-cache
-    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
+    # helpful headers for <img cross-origin>
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     resp.headers["Pragma"] = "no-cache"
     resp.headers["Expires"] = "0"
-    resp.headers["Connection"] = "keep-alive"
     return resp
 
 @bp_camera.route("/health")
 def health():
-    return {"ok": True, "backend": CAM_BACKEND or "auto", "have_picamera2": _have_picamera2(),
-            "w": WIDTH, "h": HEIGHT, "fps": FPS}
+    return {
+        "ok": True,
+        "backend": CAM_BACKEND or "auto",
+        "have_picamera2": _have_picamera2(),
+        "w": WIDTH, "h": HEIGHT, "fps": FPS
+    }
