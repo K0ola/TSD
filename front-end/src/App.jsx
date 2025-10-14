@@ -1,117 +1,48 @@
 // src/App.jsx
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import "./App.css";
 
 /**
- * Base API:
- * - Prod (build servi par Flask) => même origine
- * - Dev (npm start) => définir REACT_APP_API_BASE (ex: http://192.168.4.1:8000)
+ * Par défaut on utilise une URL **relative** (aucun CORS si
+ * le front est servi par Flask OU si un proxy dev est en place).
+ * Tu peux saisir une base absolue dans le champ si besoin
+ * (ex: http://192.168.4.1:8000).
  */
-const DEFAULT_BASE =
-  process.env.REACT_APP_API_BASE ||
-  `${window.location.protocol}//${window.location.hostname}:8000`;
+const DEFAULT_BASE = ""; // <- vide = même origine/proxy
 
 export default function App() {
   const [apiBase, setApiBase] = useState(DEFAULT_BASE);
-  const [health, setHealth] = useState({ ok: false, last: null });
-  const [imgError, setImgError] = useState(false);
+  const base = useMemo(() => (apiBase || "").replace(/\/$/, ""), [apiBase]);
 
-  const base = useMemo(() => apiBase.replace(/\/$/, ""), [apiBase]);
-  const feedUrl = `${base}/api/camera/video_feed`;
-  const healthUrl = `${base}/api/health`;
-
-  // Ping /api/health toutes les 5 s
-  useEffect(() => {
-    let stop = false;
-
-    const tick = async () => {
-      try {
-        const res = await fetch(healthUrl, { cache: "no-store" });
-        if (!stop) setHealth({ ok: res.ok, last: new Date().toLocaleTimeString() });
-      } catch (_e) {
-        if (!stop) setHealth({ ok: false, last: new Date().toLocaleTimeString() });
-      }
-    };
-
-    tick();
-    const id = setInterval(tick, 5000);
-    return () => {
-      stop = true;
-      clearInterval(id);
-    };
-  }, [healthUrl]);
+  const [cacheBust, setCacheBust] = useState(0);
+  const feedUrl = `${base}/api/camera/video_feed${cacheBust ? `?t=${cacheBust}` : ""}`;
 
   return (
     <div className="App" style={{ padding: 16, maxWidth: 960, margin: "0 auto" }}>
-      <header style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
-        <h1 style={{ margin: 0 }}>TSD — Caméra</h1>
-        <span
-          title={health.ok ? "API OK" : "API indisponible"}
-          style={{
-            width: 10,
-            height: 10,
-            borderRadius: "50%",
-            background: health.ok ? "#2ecc71" : "#e74c3c",
-            display: "inline-block",
-          }}
+      <h1 style={{ marginTop: 0 }}>TSD — Caméra (flux MJPEG)</h1>
+
+      <label style={{ display: "block", textAlign: "left", marginBottom: 12 }}>
+        <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>API Base URL (laisser vide = même origine)</div>
+        <input
+          value={apiBase}
+          onChange={(e) => setApiBase(e.target.value)}
+          placeholder="ex: http://192.168.4.1:8000"
+          style={{ width: "100%", padding: "10px 12px", border: "1px solid #ddd", borderRadius: 8, fontFamily: "monospace" }}
         />
-        <small style={{ color: "#666" }}>
-          {health.last ? `Dernier check: ${health.last}` : "…"}
-        </small>
-      </header>
+      </label>
 
-      <section style={{ display: "grid", gap: 12, gridTemplateColumns: "1fr", alignItems: "start", marginBottom: 16 }}>
-        <label style={{ textAlign: "left" }}>
-          <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>API Base URL</div>
-          <input
-            value={apiBase}
-            onChange={(e) => setApiBase(e.target.value)}
-            placeholder="http://192.168.4.1:8000"
-            style={{
-              width: "100%",
-              padding: "10px 12px",
-              border: "1px solid #ddd",
-              borderRadius: 8,
-              fontFamily: "monospace",
-            }}
-          />
-        </label>
-      </section>
+      <code style={{ fontSize: 12, display: "block", textAlign: "left", marginBottom: 8 }}>
+        {`${base || "(même origine)"}/api/camera/video_feed`}
+      </code>
 
-      <section style={{ textAlign: "left", marginBottom: 8 }}>
-        <div style={{ fontSize: 12, color: "#666" }}>Flux MJPEG</div>
-        <code style={{ fontSize: 12 }}>{feedUrl}</code>
-      </section>
-
-      <div
-        style={{
-          width: "100%",
-          background: "#111",
-          borderRadius: 12,
-          overflow: "hidden",
-          border: "1px solid #222",
-        }}
-      >
-        {!imgError ? (
-          <img
-            key={feedUrl}                 // force un rechargement si l’URL change
-            src={feedUrl}
-            alt="Pi Camera"
-            crossOrigin="anonymous"       // évite les blocages cross-origin
-            style={{ width: "100%", display: "block" }}
-            onError={() => setImgError(true)}
-            onLoad={() => setImgError(false)}
-          />
-        ) : (
-          <div style={{ color: "#fff", padding: 20 }}>
-            Impossible d’afficher le flux. Vérifie :
-            <ul>
-              <li>Que le backend Flask tourne</li>
-              <li>Que l’URL ci-dessus est correcte</li>
-              <li>Que la caméra est détectée</li>
-            </ul>
-          </div>
-        )}
+      <div style={{ background: "#111", border: "1px solid #222", borderRadius: 12, overflow: "hidden" }}>
+        <img
+          key={feedUrl}
+          src={feedUrl}
+          alt="Pi Camera"
+          style={{ width: "100%", display: "block" }}
+          onError={() => setCacheBust(Date.now())} // retente automatiquement
+        />
       </div>
     </div>
   );
